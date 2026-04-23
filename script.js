@@ -1,6 +1,8 @@
-// Get your FREE GitHub Token at: https://github.com/settings/tokens
-const GITHUB_TOKEN = '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';
-const GROQ_API_KEY = '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';
+// 🛡️ SECURITY: API Keys should be stored in a Backend Proxy (e.g., Cloudflare Workers)
+// Leave these EMPTY when pushing to GitHub. 
+// Once you deploy your proxy, paste the URL below.
+const AI_PROXY_URL = 'https://aiproxy.shekharphi785.workers.dev';
+
 // ───────────────────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
@@ -768,15 +770,7 @@ const sendChatMessage = async () => {
   const fullModelValue = $('chatbot-model-select').value; // e.g. "groq:model" or "github:model"
   const [provider, modelId] = fullModelValue.split(':');
 
-  // Key validation
-  if (provider === 'groq' && (!GROQ_API_KEY || GROQ_API_KEY.includes('YOUR_'))) {
-    appendChatMessage('bot', '⚠️ Groq API key missing in `script.js`.');
-    return;
-  }
-  if (provider === 'github' && (!GITHUB_TOKEN || GITHUB_TOKEN.includes('YOUR_'))) {
-    appendChatMessage('bot', '⚠️ GitHub Token missing in `script.js`.');
-    return;
-  }
+
 
   // Hide suggestions after first real message
   $('chatbot-suggestions').style.display = 'none';
@@ -797,42 +791,49 @@ const sendChatMessage = async () => {
       .replace('{{AGENT_NAME}}', SESSION.name || 'Agent')
       .replace('{{AGENT_ID}}', SESSION.empId || 'Unknown');
 
-    let apiEndpoint, apiKey, requestBody;
-
-    if (provider === 'groq') {
-      apiEndpoint = 'https://api.groq.com/openai/v1/chat/completions';
-      apiKey = GROQ_API_KEY.trim();
-      requestBody = {
-        model: modelId,
-        messages: [{ role: 'system', content: systemPrompt }, ...chatHistory],
-        temperature: 0.7,
-        max_tokens: 800
-      };
+    // 🌐 UNIFIED PROXY FETCH
+    // If AI_PROXY_URL is set, we use it to hide our keys.
+    // If not, it will fall back to direct calls (for local testing ONLY)
+    let res;
+    if (AI_PROXY_URL) {
+      res = await fetch(AI_PROXY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: provider, // 'groq' or 'github'
+          model: modelId,
+          messages: [{ role: 'system', content: systemPrompt }, ...chatHistory]
+        })
+      });
     } else {
-      // GitHub Models endpoint
-      apiEndpoint = 'https://models.inference.ai.azure.com/chat/completions';
-      apiKey = GITHUB_TOKEN.trim();
-      requestBody = {
-        model: modelId,
-        messages: [{ role: 'system', content: systemPrompt }, ...chatHistory],
-        temperature: 0.7,
-        max_tokens: 800
-      };
-    }
+      // ⚠️ FALLBACK: Direct call (Keys must be hardcoded above to work)
+      // This part will error if you cleared the keys above and didn't set a proxy.
+      const directUrl = provider === 'groq'
+        ? 'https://api.groq.com/openai/v1/chat/completions'
+        : 'https://models.inference.ai.azure.com/chat/completions';
 
-    const res = await fetch(apiEndpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + apiKey
-      },
-      body: JSON.stringify(requestBody)
-    });
+      const directKey = provider === 'groq' ? (typeof GROQ_API_KEY !== 'undefined' ? GROQ_API_KEY : '') : (typeof GITHUB_TOKEN !== 'undefined' ? GITHUB_TOKEN : '');
+
+      res = await fetch(directUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + directKey
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: 'system', content: systemPrompt }, ...chatHistory],
+          temperature: 0.7,
+          max_tokens: 800
+        })
+      });
+    }
 
     const data = await res.json();
 
+
     if (!res.ok || data.error) {
-      const errDetail = data.error?.message || data.error || 'Unknown API Error';
+      const errDetail = data.error?.message || JSON.stringify(data.error) || 'Unknown API Error';
       console.error(`${provider.toUpperCase()} API Error:`, data);
       throw new Error(errDetail);
     }
@@ -847,7 +848,7 @@ const sendChatMessage = async () => {
 
   } catch (err) {
     removeTypingIndicator(typingId);
-    appendChatMessage('bot', `❌ Error: ${err.message}. Please check your API key or try again.`);
+    appendChatMessage('bot', `❌ ${provider.toUpperCase()} API Error: ${err.message}`);
   } finally {
     isChatLoading = false;
     $('chatbot-send-btn').disabled = false;
