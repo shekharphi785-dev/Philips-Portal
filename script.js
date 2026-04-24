@@ -2,6 +2,10 @@
 // Leave these EMPTY when pushing to GitHub. 
 // Once you deploy your proxy, paste the URL below.
 const AI_PROXY_URL = 'https://aiproxy.shekharphi785.workers.dev';
+// const GROQ_API_KEY = '';
+// const GITHUB_TOKEN = '';
+// const OPENAI_API_KEY = '';
+// const DEEPSEEK_API_KEY = '';
 
 // ───────────────────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -148,6 +152,8 @@ window.addEventListener('DOMContentLoaded', () => {
   setInterval(pollNotifications, 10000); // Polling every 10 seconds to avoid hitting Google limits
   renderNotifications();
 });
+
+
 
 const doLogin = () => {
   const nameEl = $('inp-name');
@@ -723,7 +729,6 @@ const restoreChatUI = () => {
   // Hide the welcome banner if there are messages
   const welcome = msgs.querySelector('.chatbot-welcome');
   if (welcome) welcome.style.display = 'none';
-  $('chatbot-suggestions').style.display = 'none';
   chatHistory.forEach(({ role, content }) => {
     if (role === 'user' || role === 'assistant') {
       appendChatMessage(role === 'assistant' ? 'bot' : 'user', content);
@@ -750,14 +755,6 @@ const clearChatHistory = () => {
       <h3 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 5px;">How can I help you, <span id="chatbot-greet-name">${SESSION.name ? SESSION.name.split(' ')[0] : 'Agent'}</span>?</h3>
     </div>
   `;
-  $('chatbot-suggestions').style.display = 'flex';
-};
-
-const sendSuggestion = (btn) => {
-  const text = btn.textContent;
-  $('chatbot-suggestions').style.display = 'none';
-  $('chatbot-input').value = text;
-  sendChatMessage();
 };
 
 const sendChatMessage = async () => {
@@ -772,8 +769,6 @@ const sendChatMessage = async () => {
 
 
 
-  // Hide suggestions after first real message
-  $('chatbot-suggestions').style.display = 'none';
 
   // Add user message to UI and history
   appendChatMessage('user', userMsg);
@@ -807,12 +802,17 @@ const sendChatMessage = async () => {
       });
     } else {
       // ⚠️ FALLBACK: Direct call (Keys must be hardcoded above to work)
-      // This part will error if you cleared the keys above and didn't set a proxy.
-      const directUrl = provider === 'groq'
-        ? 'https://api.groq.com/openai/v1/chat/completions'
-        : 'https://models.inference.ai.azure.com/chat/completions';
+      let directUrl = '';
+      if (provider === 'groq') directUrl = 'https://api.groq.com/openai/v1/chat/completions';
+      else if (provider === 'openai') directUrl = 'https://api.openai.com/v1/chat/completions';
+      else if (provider === 'deepseek') directUrl = 'https://api.deepseek.com/v1/chat/completions';
+      else directUrl = 'https://models.inference.ai.azure.com/chat/completions'; // github
 
-      const directKey = provider === 'groq' ? (typeof GROQ_API_KEY !== 'undefined' ? GROQ_API_KEY : '') : (typeof GITHUB_TOKEN !== 'undefined' ? GITHUB_TOKEN : '');
+      let directKey = '';
+      if (provider === 'groq') directKey = (typeof GROQ_API_KEY !== 'undefined' ? GROQ_API_KEY : '');
+      else if (provider === 'openai') directKey = (typeof OPENAI_API_KEY !== 'undefined' ? OPENAI_API_KEY : '');
+      else if (provider === 'deepseek') directKey = (typeof DEEPSEEK_API_KEY !== 'undefined' ? DEEPSEEK_API_KEY : '');
+      else directKey = (typeof GITHUB_TOKEN !== 'undefined' ? GITHUB_TOKEN : '');
 
       res = await fetch(directUrl, {
         method: 'POST',
@@ -833,7 +833,12 @@ const sendChatMessage = async () => {
 
 
     if (!res.ok || data.error) {
-      const errDetail = data.error?.message || JSON.stringify(data.error) || 'Unknown API Error';
+      let errDetail = 'Unknown API Error';
+      if (data.error) {
+        errDetail = data.error.message || data.error.code || JSON.stringify(data.error);
+      } else {
+        errDetail = `HTTP ${res.status}: ${res.statusText}`;
+      }
       console.error(`${provider.toUpperCase()} API Error:`, data);
       throw new Error(errDetail);
     }
@@ -844,7 +849,7 @@ const sendChatMessage = async () => {
     localStorage.setItem(CHAT_LS_KEY, JSON.stringify(chatHistory));
 
     removeTypingIndicator(typingId);
-    appendChatMessage('bot', botReply);
+    await appendChatMessage('bot', botReply, true);
 
   } catch (err) {
     removeTypingIndicator(typingId);
@@ -856,7 +861,7 @@ const sendChatMessage = async () => {
   }
 };
 
-const appendChatMessage = (role, text) => {
+const appendChatMessage = async (role, text, animate = false) => {
   const msgs = $('chatbot-messages');
   const div = document.createElement('div');
   div.className = 'chatbot-msg chatbot-msg-' + role;
@@ -864,10 +869,14 @@ const appendChatMessage = (role, text) => {
   const bubble = document.createElement('div');
   bubble.className = 'chatbot-bubble';
 
-  // Render markdown-lite: bold, code, bullets, links
-  bubble.innerHTML = formatChatText(text);
-
-  div.appendChild(bubble);
+  if (animate && role === 'bot') {
+    div.appendChild(bubble);
+    msgs.appendChild(div);
+    await typeEffect(bubble, text, msgs);
+  } else {
+    bubble.innerHTML = formatChatText(text);
+    div.appendChild(bubble);
+  }
 
   // Timestamp
   const ts = document.createElement('div');
@@ -876,8 +885,30 @@ const appendChatMessage = (role, text) => {
   ts.textContent = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
   div.appendChild(ts);
 
-  msgs.appendChild(div);
+  if (!animate || role !== 'bot') {
+    msgs.appendChild(div);
+  }
   msgs.scrollTop = msgs.scrollHeight;
+};
+
+const typeEffect = (element, text, scrollEl) => {
+  return new Promise((resolve) => {
+    let i = 0;
+    const words = text.split(' ');
+    let currentText = '';
+
+    const interval = setInterval(() => {
+      if (i < words.length) {
+        currentText += words[i] + ' ';
+        element.innerHTML = formatChatText(currentText.trim());
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+        i++;
+      } else {
+        clearInterval(interval);
+        resolve();
+      }
+    }, 45); // Speed of typing (ms per word)
+  });
 };
 
 const formatChatText = (text) => {
